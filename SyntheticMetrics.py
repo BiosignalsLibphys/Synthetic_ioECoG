@@ -4,11 +4,13 @@ from matplotlib import pyplot as plt
 import pandas as pd 
 import seaborn as sns
 import math
+import torch
+#from ECoG_GAN_dim import Generator
 
 ## Fidelity and Authenticity Metrics ##
 from scipy.stats import kurtosis, skew, pearsonr, wasserstein_distance, entropy
 from scipy.spatial.distance import jensenshannon
-from scipy.signal import  welch, cwt, morlet2
+from scipy.signal import welch, cwt, morlet2
 from skimage.metrics import structural_similarity as ssim
 from scipy.stats import mode, entropy, kurtosis, skew, iqr, pearsonr
 from scipy.integrate import simps
@@ -17,24 +19,61 @@ from scipy.integrate import simps
 from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
 
-# Setting the visualization style
-sns.set_style('white')
 
-# Load the data from the file >>>> NO MEU CASO É HEALTHY
-with open('healthy_synthetic_data.pkl', 'rb') as f:
-    data = pickle.load(f)
+# Functions to generate synthetic timeseries
+def generate_synthetic_series(generator, n_series, latent_dim, device):
+    generator.eval()
+    with torch.no_grad():
+        z = torch.randn(n_series, latent_dim).to(device)
+        synthetic_series = generator(z)
+    return synthetic_series.cpu().numpy()
 
 
-## Organizing data into dictionary ##
-# Create an empty dictionary
-data_dict = {}
-# Split the data into synthetic and real groups
-synthetic_data = data[:10]  # The first 5 segments are synthetic
-real_data = data[10:]  # The last 5 segments are real
-# Assign the groups to the keys in the dictionary
-data_dict['Synthetic'] = synthetic_data
-data_dict['Real'] = real_data
+# Loading the Generator model and synthesizing data
+def load_model(g, sd, ld, l_signals, n_signals, device='cpu'):
+    """
+    -----
+    Brief
+    -----
+    Loading the pre-trained generator model .
+    ----------
+    Parameters
+    ----------
+    g : Generator Model
+        class
+    sd : model parameters
+        .pth file path
 
+    l_signals : int
+        length of the signals to be generated
+
+    ld : int
+        latent dimensions
+
+    n_signals : int
+        number of signals to generate
+    device : string
+        device on which the tensor will be allocated.
+    Returns
+    -------
+    synth_data : nd-array
+    """
+    generator = g(l_signals,ld,100)
+    print('generator initialized')
+    generator.load_state_dict(torch.load(sd, map_location=torch.device(device)))
+    synth_data = generate_synthetic_series(generator, n_signals, ld, device).reshape(n_signals,l_signals)
+    return synth_data
+
+############################################
+#saved_state_dict = torch.load(trained_parameters,map_location=torch.device('cpu'))
+
+# Print keys of the saved state dictionary
+#print("Saved state dict keys:")
+#print(saved_state_dict.keys())
+
+# Print keys of the model's state dictionary
+#print("Model state dict keys:")
+#print(Generator(2048,100,100).state_dict().keys())
 
 def medium_wave(segment):
     """
@@ -88,6 +127,7 @@ def calculate_num_bins(data):
     num_bins = int(np.ceil((np.max(data) - np.min(data)) / bin_width))
     return num_bins
 
+
 ###FIDELITY
 
 #### HISTOGRAM ANALYSIS #### >>> OR TIME ANALYSIS?
@@ -115,8 +155,11 @@ def time_analysis(real_data, synthetic_data):
     """
     # Multiple Signal Time Analysis
     if isinstance(real_data,(np.ndarray, list)) and np.array(real_data).ndim >= 2:
-        real_data,_ = medium_wave(real_data)
-        synthetic_data,_ = medium_wave(synthetic_data)
+        real_data, _ = medium_wave(real_data)
+        synthetic_data, _ = medium_wave(synthetic_data)
+        print('Dataset Analysis')
+    else:
+        print('Sample Analysis')
 
     # Signal Time Analysis
     print('Mean_Real:', np.mean(real_data))
@@ -162,6 +205,9 @@ def wasserstein_distance_(time_series1, time_series2, num_bins=30, range_bins=(0
     # Convert to list if input is a single array, or if list only contains one signal, nest it into another list.
     if isinstance(time_series1, (np.ndarray, list)) and np.array(time_series1).ndim == 1:
         time_series1 = [time_series1]
+        print('Sample Analysis')
+    else:
+        print('Dataset Analysis')
     if isinstance(time_series2, (np.ndarray, list)) and np.array(time_series2).ndim == 1:
         time_series2 = [time_series2]
 
@@ -207,6 +253,12 @@ def kl_divergence(time_series1, time_series2, num_bins=30, range_bins=(0, 1)):
     kl_divergence: float
         the KL divergence between the two distributions.
     """
+    # Check if the input is a single signal or a list of signals
+    if isinstance(time_series1[0], (list, np.ndarray)):
+        print('Dataset Analysis')
+    else:
+        time_series1 = [time_series1]
+        print('Sample Analysis')
 
     # Compute histograms
     hist_1, bin_edges_1 = np.histogram(time_series1, bins=num_bins, range=range_bins, density=True)
@@ -254,6 +306,13 @@ def js_divergence(time_series1, time_series2, num_bins=30, range_bins=(0, 1)):
     js_divergence: float
         the JS distance between the two distributions.
     """
+    # Check if the input is a single signal or a list of signals
+    if isinstance(time_series1[0], (list, np.ndarray)):
+        print('Dataset Analysis')
+    else:
+        time_series1 = [time_series1]
+        print('Sample Analysis')
+
     # Compute histograms
     hist_1, bin_edges_1 = np.histogram(time_series1, bins=num_bins, range=range_bins, density=True)
     hist_2, bin_edges_2 = np.histogram(time_series2, bins=num_bins, range=range_bins, density=True)
@@ -272,19 +331,6 @@ def js_divergence(time_series1, time_series2, num_bins=30, range_bins=(0, 1)):
 
     print("Jensen-Shannon Distance:", js_div)
     return js_div
-
-
-## Usage on multiple signals ##
-time_analysis(real_data, synthetic_data)
-wasserstein_distance_(real_data, synthetic_data)
-wasserstein_distance_(real_data, real_data)
-wasserstein_distance_(synthetic_data, synthetic_data)
-
-## Usage on one signal ##
-time_analysis(real_data[0], synthetic_data[0])
-wasserstein_distance_(np.array(real_data[0]), np.array(synthetic_data[0]))
-kl_divergence(real_data[0], synthetic_data[0])
-js_divergence(real_data[0], synthetic_data[0])
 
 
 def hellinger_distance(time_series1, time_series2, num_bins = 30, range_bins = (0,1)):
@@ -307,6 +353,14 @@ def hellinger_distance(time_series1, time_series2, num_bins = 30, range_bins = (
     sosq / math.sqrt(2): float
         The Hellinger distance between the two distributions.
     """
+
+    # Check if the input is a single signal or a list of signals
+    if isinstance(time_series1[0], (list, np.ndarray)):
+        print('Dataset Analysis')
+    else:
+        time_series1 = [time_series1]
+        print('Sample Analysis')
+
     # Compute histograms
     p, bin_edges_1 = np.histogram(time_series1, bins=num_bins, range=range_bins, density=True)
     q, bin_edges_2 = np.histogram(time_series2, bins=num_bins, range=range_bins, density=True)
@@ -331,8 +385,6 @@ def hellinger_distance(time_series1, time_series2, num_bins = 30, range_bins = (
     sosq = sum(list_of_squares)
     print('Helinger Distance :',sosq / math.sqrt(2))
     return sosq / math.sqrt(2)
-# Usage
-hellinger_distance(real_data[0], synthetic_data[0])
 
 
 def bhattacharyya_distance(time_series1, time_series2, num_bins, range_bins):
@@ -357,6 +409,13 @@ def bhattacharyya_distance(time_series1, time_series2, num_bins, range_bins):
     -np.log(bht): float
         The Bhattacharyya distance between the two distributions of the timeseries.
     """
+
+    # Check if the input is a single signal or a list of signals
+    if isinstance(time_series1[0], (list, np.ndarray)):
+        print('Dataset Analysis')
+    else:
+        print('Sample Analysis')
+
     # Compute histograms
     hist_1, bin_edges_1 = np.histogram(time_series1, bins=num_bins, range=range_bins, density=True)
     hist_2, bin_edges_2 = np.histogram(time_series2, bins=num_bins, range=range_bins, density=True)
@@ -376,8 +435,6 @@ def bhattacharyya_distance(time_series1, time_series2, num_bins, range_bins):
         print('Bhattacharyya Distance:', -np.log(bht))
         return -np.log(bht)
 
-# Usage
-bhattacharyya_distance(real_data[0], synthetic_data[0], 30, (0,1))
 
 #### FREQUENCY ANALYSIS ####
 
@@ -436,9 +493,11 @@ class FrequencyAnalysis:
         # Check if the input is a single signal or a list of signals
         if isinstance(data[0], (list, np.ndarray)):
             n_signals = len(data)
+            print('Dataset Analysis')
         else:
             data = [data]
             n_signals = 1
+            print('Sample Analysis')
 
         for sig in range(n_signals):
             # Compute the Power Spectral Density (PSD) using Welch's method
@@ -481,7 +540,7 @@ class FrequencyAnalysis:
 
         return freqs, psd, total_power, slow_rel_power, delta_rel_power, theta_rel_power, alpha_rel_power, beta_rel_power, dominant_freq, idx_slow, idx_delta
 
-    def plot_psd(self, real_data, synthetic_data, x_limit1=0, x_limit2=8, y_limit1=0, y_limit2=0.04):  
+    def plot_psd(self, real_data, synthetic_data, x_limit1=0, x_limit2=8, y_limit1=0, y_limit2=0.01):  
         """
         -----
         Brief
@@ -509,6 +568,10 @@ class FrequencyAnalysis:
         -------
         None
         """
+
+        # Check if the input is a single signal or a list of signals
+        is_sample = not isinstance(real_data[0], (list, np.ndarray)) or not isinstance(synthetic_data[0], (list, np.ndarray))
+
         # Compute relative power for real and synthetic data
         freqs_r, psd_r, _, slow_rel_power_r, delta_rel_power_r, _, _, _, _, idx_slow, idx_delta = self.compute_relative_power(real_data, 'real')
         freqs_s, psd_s, _, slow_rel_power_s, delta_rel_power_s, _, _, _, _, idx_slow, idx_delta = self.compute_relative_power(synthetic_data, 'synthetic')
@@ -516,25 +579,30 @@ class FrequencyAnalysis:
         # Plot the PSD for real data
         plt.figure(figsize=(10, 8))
         plt.subplot(121)
-        plt.text(5, 0.035, f'Slow: {slow_rel_power_r[0]:.2%}', fontsize=12)  # Adjust the position (5, 0.035) as needed
-        plt.text(5, 0.032, f'Delta: {delta_rel_power_r[0]:.2%}', fontsize=12)  # Adjust the position (5, 0.032) as needed
+        plt.text(5, 0.035, f'Slow: {np.mean(slow_rel_power_r):.2%}', fontsize=12)  # Adjust the position (5, 0.035) as needed
+        plt.text(5, 0.032, f'Delta: {np.mean(delta_rel_power_r):.2%}', fontsize=12)  # Adjust the position (5, 0.032) as needed
         f_scale = np.mean(freqs_r, axis=0)
         plt.plot(f_scale, np.mean(psd_r, axis=0), lw=2, color='k')
         plt.fill_between(f_scale, np.mean(psd_r, axis=0), where=idx_slow, color='C1', alpha=0.3)
         plt.fill_between(f_scale, np.mean(psd_r, axis=0), where=idx_delta, color='skyblue')
         plt.xlabel('Frequency (Hz)', fontsize=14)
-        plt.ylabel('Power spectral density (uV^2 / Hz)', fontsize=14)
+        plt.ylabel('Power spectral density ($\mu V^2$/Hz)', fontsize=14)
         plt.xticks(fontsize=14)
         plt.yticks(fontsize=14)
         plt.xlim([x_limit1, x_limit2])
         plt.ylim([y_limit1, y_limit2])  # plt.ylim([0, np.max(psd_r) * 1.1])
-        plt.title("Original", fontsize=14)
-        plt.legend(["Mean Welch's periodogram", 'Slow Delta Band [0.5-2]Hz', 'Fast Delta Band [2-4]Hz'])
+        #plt.title("Original", fontsize=14)
+        title = 'Original'
+        if is_sample:
+            title += ' - Sample Analysis'
+        
+        plt.title(title, fontsize=14)
+        plt.legend(["Mean Welch's periodogram", 'Slow Delta Band [0.5-2]Hz', 'Fast Delta Band [2-4]Hz'],fontsize=12)
 
         # Plot the PSD for synthetic data
         plt.subplot(122)
-        plt.text(5, 0.035, f'Slow: {slow_rel_power_s[0]:.2%}', fontsize=12)  # Adjust the position (5, 0.035) as needed
-        plt.text(5, 0.032, f'Delta: {delta_rel_power_s[0]:.2%}', fontsize=12)  # Adjust the position (5, 0.032) as needed
+        plt.text(5, 0.035, f'Slow: {np.mean(slow_rel_power_s):.2%}', fontsize=12)  # Adjust the position (5, 0.035) as needed
+        plt.text(5, 0.032, f'Delta: {np.mean(delta_rel_power_s):.2%}', fontsize=12)  # Adjust the position (5, 0.032) as needed
         f_scale = np.mean(freqs_s, axis=0)
         plt.plot(f_scale, np.mean(psd_s, axis=0), lw=2, color='k')
         plt.fill_between(f_scale, np.mean(psd_s, axis=0), where=idx_slow, color='C1', alpha=0.3)
@@ -544,8 +612,13 @@ class FrequencyAnalysis:
         plt.yticks(fontsize=14)
         plt.xlim([x_limit1, x_limit2])
         plt.ylim([y_limit1, y_limit2])  
-        plt.title("Synthetic", fontsize=14)
-        plt.legend(["Mean Welch's periodogram", 'Slow Delta Band [0.5-2]Hz', 'Fast Delta Band [2-4]Hz'])
+        #plt.title("Synthetic", fontsize=14)
+        title = 'Original'
+        if is_sample:
+            title += ' - Sample Analysis'
+        
+        plt.title(title, fontsize=14)
+        plt.legend(["Mean Welch's periodogram", 'Slow Delta Band [0.5-2]Hz', 'Fast Delta Band [2-4]Hz'],fontsize=12)
 
         plt.show() 
 
@@ -555,7 +628,6 @@ class FrequencyAnalysis:
         Brief
         -----
         Plots a bar chart comparing the frequencies of two signals.
-
         ----------
         Parameters
         ----------
@@ -563,7 +635,6 @@ class FrequencyAnalysis:
             Real input signals.
         synthetic_data : list or np.ndarray
             Synthetic input signals.
-
         -------
         Returns
         -------
@@ -572,6 +643,9 @@ class FrequencyAnalysis:
         labels = ['slow', 'delta','theta', 'alpha', 'beta']
         x = np.arange(len(labels))  # the label locations
         width = 0.35  # the width of the bars
+
+        # Check if the input is a single signal or a list of signals
+        is_sample = not isinstance(real_data[0], (list, np.ndarray)) or not isinstance(synthetic_data[0], (list, np.ndarray))
 
         # Compute relative power for real and synthetic data
         freqs_r, _, _, slow_rel_power_r, delta_rel_power_r, theta_rel_power_r, alpha_rel_power_r, beta_rel_power_r, _, _, _ = self.compute_relative_power(real_data, 'real')
@@ -606,12 +680,17 @@ class FrequencyAnalysis:
         rects2 = ax.bar(x + width/2, mean_s, width, yerr=std_s, capsize=10, label='Synthetic', color='black', alpha=0.7)
 
         # Add labels, title, and legend
-        ax.set_ylabel('Percentage (%)')
-        ax.set_xlabel('Frequency Band')
-        ax.set_title('Frequency distribution comparison between real and synthetic signals')
+        ax.set_ylabel('Percentage (%)',fontsize=14)
+        ax.set_xlabel('Frequency Band',fontsize=14)
+        #ax.set_title('Frequency distribution comparison between real and synthetic signals',fontsize=14)
+        title = 'Frequency distribution comparison between real and synthetic signals'
+        if is_sample:
+            title += ' - Sample Analysis'
+        
+        ax.set_title(title, fontsize=14)
         ax.set_xticks(x)
-        ax.set_xticklabels(labels)
-        ax.legend()
+        ax.set_xticklabels(labels,fontsize=12)
+        ax.legend(fontsize=12)
 
         fig.tight_layout()
         plt.show()
@@ -639,8 +718,10 @@ class FrequencyAnalysis:
         # Check if the input is a list of signals or a single signal
         if isinstance(data[0], (list, np.ndarray)):
             data_combined = np.concatenate(data)
+            print('Dataset Analysis')
         else:
             data_combined = data
+            print('Sample Analysis')
 
         # Compute statistical metrics
         mean = np.mean(data_combined)
@@ -672,35 +753,6 @@ class FrequencyAnalysis:
         print(f"Kurtosis: {data_kurtosis}")
         print("")
 
-# Usage example
-
-# Initialize the FrequencyAnalysis class
-fa = FrequencyAnalysis(fs=2048)
-
-# Compute relative power for real and synthetic data
-fa.compute_relative_power(real_data, 'real')
-fa.compute_relative_power(synthetic_data, 'synthetic')
-
-# Compute relative power for real and synthetic data - one sample
-fa.compute_relative_power(synthetic_data[0], 'synthetic')
-
-# Plot power spectral density
-fa.plot_psd(real_data, synthetic_data)
-
-# Plot power spectral density - one sample
-fa.plot_psd(real_data[0], synthetic_data[0])
-
-# Plot frequency comparison
-fa.plot_frequency_comparison(real_data, synthetic_data)
-
-# Print histogram metrics for real data - list of signals
-fa.print_histogram_metrics(real_data,'real')
-
-# Plot power spectral density - one sample
-fa.plot_frequency_comparison(real_data[0], synthetic_data[0])
-
-# Print histogram metrics for real data - one sample
-fa.print_histogram_metrics(real_data[0],'real')
 
 #### TIME-FREQUENCY ANALYSIS ####
 
@@ -731,7 +783,6 @@ class ScalogramAnalyzer:
         Brief
         -----
         Compute and plot the scalogram for the given signal index using Morlet wavelet.
-
         ----------
         Parameters
         ----------
@@ -764,18 +815,18 @@ class ScalogramAnalyzer:
         fig, axs = plt.subplots(1, 2, figsize=(15, 5))
         
         axs[0].imshow(self.scalogram_real, extent=[time_real.min(), time_real.max(), self.frequencies.min(), self.frequencies.max()], aspect='auto', origin='lower', cmap='terrain')
-        axs[0].set_title('Original Data Scalogram')
-        axs[0].set_xlabel('Time (s)')
-        axs[0].set_ylabel('Frequency (Hz)')
+        axs[0].set_title('Original', fontsize=14)
+        axs[0].set_xlabel('Time (s)', fontsize=14)
+        axs[0].set_ylabel('Frequency (Hz)', fontsize=14)
         
         axs[1].imshow(self.scalogram_synthetic, extent=[time_synthetic.min(), time_synthetic.max(), self.frequencies.min(), self.frequencies.max()], aspect='auto', origin='lower', cmap='terrain')
-        axs[1].set_title('Synthetic Data Scalogram')
-        axs[1].set_xlabel('Time (s)')
-        axs[1].set_ylabel('Frequency (Hz)')
+        axs[1].set_title('Synthetic', fontsize=14)
+        axs[1].set_xlabel('Time (s)', fontsize=14)
+        axs[1].set_ylabel('Frequency (Hz)', fontsize=14)
         
         for ax in axs:
             cbar = plt.colorbar(ax.images[0], ax=ax, label='Magnitude')
-            cbar.set_label('Magnitude')
+            cbar.set_label('Magnitude', fontsize=14)
             ax.set_xticks(np.arange(int(time_real.min()), int(time_real.max()) + 1, step=2))
         
         #plt.savefig('scalograms.png')
@@ -787,7 +838,6 @@ class ScalogramAnalyzer:
         Brief
         -----
         Compute similarity metrics between the real and synthetic scalograms.
-
         -------
         Returns
         -------
@@ -824,11 +874,6 @@ class ScalogramAnalyzer:
 
         return mse, correlation, cos_sim, s
 
-# Usage example
-# Assuming real_data and synthetic_data are defined and contain the signal data
-analyzer = ScalogramAnalyzer()
-analyzer.plot_scalogram(real_data, synthetic_data, signal_indice=1)
-mse, correlation, cos_sim, s = analyzer.compute_scalogram_similarity_metrics()
 
 
 #### NON-LINEAR ANALYSIS ####
@@ -865,34 +910,30 @@ def analyze_data_distribution(real_data, synthetic_data):
 
     # PCA analysis
     pca = PCA(n_components=2)
-    pca.fit(real_data)
-    pca_real = pd.DataFrame(pca.transform(real_data), columns=['1st Component', '2nd Component']).assign(Data='Real')
-    pca_synthetic = pd.DataFrame(pca.transform(synthetic_data), columns=['1st Component', '2nd Component']).assign(Data='Synthetic')
-    pca_result = pd.concat([pca_real, pca_synthetic])
+    pca_real = pd.DataFrame(pca.fit_transform(real_data), columns=['1st Component', '2nd Component'])
+    pca_synthetic = pd.DataFrame(pca.transform(synthetic_data), columns=['1st Component', '2nd Component'])
+
+    pca_result = pd.concat([pca_real.assign(Data='Real'), pca_synthetic.assign(Data='Synthetic')])
 
     # Concatenate real and synthetic data for t-SNE
-    tsne_data = np.concatenate((real_data, synthetic_data), axis=0)
+    tsne_data = np.vstack((real_data, synthetic_data))
 
-    # Print the length of real_data for debugging
-    print('len:', len(real_data))
+    # Debugging info
+    print('len real_data:', len(real_data))
 
     # Ensure perplexity is less than the number of samples
     perplexity_value = min(30, len(tsne_data) - 1)
 
     # t-SNE analysis
     tsne = TSNE(n_components=2, verbose=1, perplexity=perplexity_value)
-    tsne_result = tsne.fit_transform(tsne_data)
+    tsne_transformed = tsne.fit_transform(tsne_data)
 
     # Create DataFrame for t-SNE results
-    tsne_result = pd.DataFrame(tsne_result, columns=['X', 'Y']).assign(Data='Real')
+    tsne_result = pd.DataFrame(tsne_transformed, columns=['X', 'Y'])
+    tsne_result['Data'] = ['Real'] * len(real_data) + ['Synthetic'] * len(synthetic_data)
 
-    # Print the length of tsne_data for debugging
+    # Debugging info
     print(f"Length of tsne_data: {len(tsne_data)}")
-
-    # Adjust the condition for assigning 'Synthetic' labels
-    half_point = len(tsne_result) // 2
-    tsne_result.loc[half_point:, 'Data'] = 'Synthetic'
-
     print(tsne_result)
 
     # Custom colors and alpha values
@@ -902,28 +943,122 @@ def analyze_data_distribution(real_data, synthetic_data):
     # Plotting the results
     fig, axes = plt.subplots(ncols=2, figsize=(14, 5))
 
-    sns.scatterplot(x='1st Component', y='2nd Component', data=pca_result, hue='Data', palette = palette, style='Data', alpha = alpha, ax=axes[0])
-    sns.despine()
-    axes[0].set_title('PCA Result')
+    sns.scatterplot(x='1st Component', y='2nd Component', data=pca_result, hue='Data', palette=palette, style='Data', alpha=alpha, ax=axes[0])
+    axes[0].set_title('PCA Result', fontsize=14)
+    axes[0].set_xlabel('1st Component', fontsize=14)
+    axes[0].set_ylabel('2nd Component', fontsize=14)
 
-    sns.scatterplot(x='X', y='Y', data=tsne_result, hue='Data', palette = palette, style='Data',alpha = alpha, ax=axes[1])
-    sns.despine()
-    for i in [0, 1]:
-        axes[i].set_xticks([])
-        axes[i].set_yticks([])
+    sns.scatterplot(x='X', y='Y', data=tsne_result, hue='Data', palette=palette, style='Data', alpha=alpha, ax=axes[1])
+    axes[1].set_title('t-SNE Result', fontsize=14)
+    axes[1].set_xlabel('X', fontsize=14)
+    axes[1].set_ylabel('Y', fontsize=14)
 
-    axes[1].set_title('t-SNE Result')
-    fig.suptitle('Assessing Diversity: Qualitative Comparison of Real and Synthetic Data Distributions', fontsize=14)
+    # Remove tick marks for a cleaner look
+    for ax in axes:
+        ax.set_xticks([])
+        ax.set_yticks([])
+        sns.despine(ax=ax)
+
+    # Adjust legend font size
+    for ax in axes:
+        legend = ax.legend(prop={'size': 12})
+        legend.set_title('Data', prop={'size': 12})
+
+    # Set a super title for the figure
+    #fig.suptitle('Assessing Diversity: Qualitative Comparison of Real and Synthetic Data Distributions', fontsize=14)
     fig.tight_layout()
     fig.subplots_adjust(top=.88)
 
     # Ensure the plot is displayed
     plt.show()
 
-# Usage example
-analyze_data_distribution(real_data, synthetic_data)
+
+if __name__ == '__main__':
+    # Setting the visualization style
+    sns.set_style('white')
+
+    with open('Synthetic Data/generated_signals_EcogGAN_test5.pkl', 'rb') as f:
+        data = pickle.load(f)
 
 
+
+    ## Generating synthetic series to be compared with the og data ##
+
+    # Defining the trained generator parameters
+    latent_dim = 100
+    sequence_l = 2048
+    device = 'cpu'
+    trained_parameters = 'Generators/EcogGAN/generator_EcogGAN_test5.pth'
+
+    # Generate and plot
+    n_synthetic_series = 15  # Specify the number of synthetic time series to generate
+    #synth_data = load_model(Generator, trained_parameters, sequence_l, latent_dim, n_synthetic_series, device)
+
+    ## Organizing data into dictionary ##
+    # Create an empty dictionary
+    data_dict = {}
+    # Split the data into synthetic and real groups
+    synthetic_data = data[:10]  # The first 5 segments are synthetic
+    real_data = data[10:]  # The last 5 segments are real
+    # Assign the groups to the keys in the dictionary
+    data_dict['Synthetic'] = synthetic_data
+    data_dict['Real'] = real_data
+
+    # Usage example
+    analyze_data_distribution(real_data, synthetic_data)
+
+    ###### Distances ######
+    ## Usage on multiple signals ##
+    time_analysis(real_data, synthetic_data)
+    wasserstein_distance_(real_data, synthetic_data)
+    wasserstein_distance_(real_data, real_data)
+    wasserstein_distance_(synthetic_data, synthetic_data)
+
+    ## Usage on one signal ##
+    time_analysis(real_data[0], synthetic_data[0])
+    wasserstein_distance_(np.array(real_data[0]), np.array(synthetic_data[0]))
+    kl_divergence(real_data[0], synthetic_data[0])
+    js_divergence(real_data[0], synthetic_data[0])
+    # Usage
+    hellinger_distance(real_data[0], synthetic_data[0])
+    # Usage
+    bhattacharyya_distance(real_data[0], synthetic_data[0], 30, (0, 1))
+
+    # Usage example
+
+    # Initialize the FrequencyAnalysis class
+    fa = FrequencyAnalysis(fs=2048)
+
+    # Compute relative power for real and synthetic data
+    fa.compute_relative_power(real_data, 'real')
+    fa.compute_relative_power(synthetic_data, 'synthetic')
+
+    # Compute relative power for real and synthetic data - one sample
+    fa.compute_relative_power(synthetic_data[0], 'synthetic')
+
+    # Plot power spectral density
+    fa.plot_psd(real_data, synthetic_data)
+
+    # Plot power spectral density - one sample
+    fa.plot_psd(real_data[0], synthetic_data[0])
+
+    # Plot frequency comparison
+    fa.plot_frequency_comparison(real_data, synthetic_data)
+
+    # Print histogram metrics for real data - list of signals
+    fa.print_histogram_metrics(real_data, 'real')
+
+    # Plot power spectral density - one sample
+    fa.plot_frequency_comparison(real_data[0], synthetic_data[0])
+
+    # Print histogram metrics for real data - one sample
+    fa.print_histogram_metrics(real_data[0], 'real')
+
+    # Usage example
+    # Assuming real_data and synthetic_data are defined and contain the signal data
+    analyzer = ScalogramAnalyzer()
+    analyzer.plot_scalogram(real_data, synthetic_data, signal_indice=1)
+    mse, correlation, cos_sim, s = analyzer.compute_scalogram_similarity_metrics()
 
 
 
