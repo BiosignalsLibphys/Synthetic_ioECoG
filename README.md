@@ -1,4 +1,4 @@
-# Time Series Evaluator
+# Synthetic ioECoG
 
 Welcome to the Time Series Evaluator (TSE)! 
 The TSE is a repository of metrics to evaluate time series
